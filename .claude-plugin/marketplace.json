@@ -1,24 +1,24 @@
 {
-  "name": "claudetop",
-  "version": "1.0.0",
-  "description": "htop for your Claude Code sessions — real-time cost tracking, cache efficiency, model comparison, smart alerts, web dashboard, and session analytics",
-  "author": {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "liorwn-claudetop",
+  "description": "claudetop — htop for Claude Code sessions",
+  "owner": {
     "name": "Lior Weinstein",
-    "url": "https://github.com/liorwn"
+    "email": "liorwn@users.noreply.github.com"
   },
-  "homepage": "https://github.com/liorwn/claudetop",
-  "repository": "https://github.com/liorwn/claudetop",
-  "license": "MIT",
-  "keywords": [
-    "claude-code",
-    "cost-tracking",
-    "tokens",
-    "analytics",
-    "status-line",
-    "dashboard",
-    "budget",
-    "devtools",
-    "htop",
-    "monitoring"
+  "plugins": [
+    {
+      "name": "claudetop",
+      "description": "Real-time cost tracking, cache efficiency, model comparison, smart alerts, web dashboard, and session analytics",
+      "version": "1.0.0",
+      "author": {
+        "name": "Lior Weinstein",
+        "email": "liorwn@users.noreply.github.com"
+      },
+      "source": ".",
+      "category": "monitoring",
+      "homepage": "https://github.com/liorwn/claudetop",
+      "tags": ["cost-tracking", "tokens", "analytics", "status-line", "budget"]
+    }
   ]
 }

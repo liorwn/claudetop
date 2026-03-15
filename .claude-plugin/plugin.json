@@ -1,0 +1,30 @@
+{
+  "name": "claudetop",
+  "version": "1.0.0",
+  "description": "htop for your Claude Code sessions — real-time cost tracking, cache efficiency, model comparison, smart alerts, web dashboard, and session analytics",
+  "author": {
+    "name": "Lior Weinstein",
+    "url": "https://github.com/liorwn"
+  },
+  "homepage": "https://github.com/liorwn/claudetop",
+  "repository": "https://github.com/liorwn/claudetop",
+  "license": "MIT",
+  "hooks": {
+    "SessionEnd": "hooks/session-end.sh"
+  },
+  "commands": [],
+  "skills": [],
+  "postInstall": "install.sh",
+  "keywords": [
+    "claude-code",
+    "cost-tracking",
+    "tokens",
+    "analytics",
+    "status-line",
+    "dashboard",
+    "budget",
+    "devtools",
+    "htop",
+    "monitoring"
+  ]
+}
