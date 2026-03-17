@@ -35,10 +35,25 @@ echo "Fetching latest Claude pricing..."
 # Source 1: GitHub repo (most reliable, community-maintained)
 FETCHED=""
 if RESPONSE=$(curl -sf --max-time 5 "$REPO_URL" 2>/dev/null); then
-  # Validate it's proper JSON with expected structure
-  if echo "$RESPONSE" | jq -e '.models.opus.input' &>/dev/null; then
-    FETCHED="$RESPONSE"
+  # Strict schema validation: all models must have expected fields with numeric values in [0, 1000]
+  VALID=$(echo "$RESPONSE" | jq -e '
+    def valid_price: type == "number" and . >= 0 and . <= 1000;
+    .models.opus.input   | valid_price and
+    .models.opus.output  | valid_price and
+    .models.opus.cache_read | valid_price and
+    .models.sonnet.input | valid_price and
+    .models.sonnet.output | valid_price and
+    .models.sonnet.cache_read | valid_price and
+    .models.haiku.input  | valid_price and
+    .models.haiku.output | valid_price and
+    .models.haiku.cache_read | valid_price
+  ' 2>/dev/null) || VALID=""
+  if [ "$VALID" = "true" ]; then
+    # Strip any unexpected keys — only keep .models and ._updated/_source/_notes
+    FETCHED=$(echo "$RESPONSE" | jq '{_updated, _source, _notes, models}')
     echo "  Fetched from GitHub repo"
+  else
+    echo "  Warning: fetched pricing failed schema validation, skipping" >&2
   fi
 fi
 

@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEST="$HOME/.claude/claudetop.sh"
 PLUGIN_DIR="$HOME/.claude/claudetop.d"
 SETTINGS="$HOME/.claude/settings.json"
-STATS_DEST="/usr/local/bin/claudetop-stats"
+STATS_DEST="$HOME/.local/bin/claudetop-stats"
 
 echo "Installing claudetop..."
 
@@ -35,17 +35,11 @@ for f in "$SCRIPT_DIR/plugins/examples/"*.sh; do
 done
 echo "  Copied example plugins to $PLUGIN_DIR/_examples/"
 
-# 5. Install claudetop-stats CLI
-if [ -w "$(dirname "$STATS_DEST")" ]; then
-  cp "$SCRIPT_DIR/claudetop-stats" "$STATS_DEST"
-  chmod +x "$STATS_DEST"
-  echo "  Installed claudetop-stats -> $STATS_DEST"
-else
-  echo "  Installing claudetop-stats (requires sudo)..."
-  sudo cp "$SCRIPT_DIR/claudetop-stats" "$STATS_DEST"
-  sudo chmod +x "$STATS_DEST"
-  echo "  Installed claudetop-stats -> $STATS_DEST"
-fi
+# 5. Install claudetop-stats CLI (user-local, no sudo needed)
+mkdir -p "$(dirname "$STATS_DEST")"
+cp "$SCRIPT_DIR/claudetop-stats" "$STATS_DEST"
+chmod +x "$STATS_DEST"
+echo "  Installed claudetop-stats -> $STATS_DEST"
 
 # 6. Copy SessionEnd hook
 HOOK_SRC="$SCRIPT_DIR/hooks/session-end.sh"
@@ -100,54 +94,37 @@ if [ -f "$ITERM_HOOK_SRC" ]; then
   chmod +x "$ITERM_HOOK_DEST"
   echo "  Installed iTerm2 hook -> $ITERM_HOOK_DEST"
 
-  # Auto-source in shell profile if CLAUDETOP_ITERM is set
-  SOURCE_LINE="[ -n \"\${CLAUDETOP_ITERM:-}\" ] && source \"$ITERM_HOOK_DEST\""
-  SHELL_RC=""
-  if [ -n "${ZSH_VERSION:-}" ] || [ -f "$HOME/.zshrc" ]; then
-    SHELL_RC="$HOME/.zshrc"
-  elif [ -f "$HOME/.bash_profile" ]; then
-    SHELL_RC="$HOME/.bash_profile"
-  elif [ -f "$HOME/.bashrc" ]; then
-    SHELL_RC="$HOME/.bashrc"
-  fi
-
-  if [ -n "$SHELL_RC" ] && ! grep -q "claudetop-iterm-hook" "$SHELL_RC" 2>/dev/null; then
-    echo "" >> "$SHELL_RC"
-    echo "# claudetop iTerm2 integration (tab title, badge, background color)" >> "$SHELL_RC"
-    echo "$SOURCE_LINE" >> "$SHELL_RC"
-    echo "  Added iTerm2 hook to $SHELL_RC"
-  else
-    echo "  iTerm2 hook already in shell profile (skipped)"
-  fi
+  # Print manual instructions instead of auto-modifying shell profile
+  echo "  To enable iTerm2 integration, add this to your shell profile (~/.zshrc or ~/.bashrc):"
+  echo "    [ -n \"\${CLAUDETOP_ITERM:-}\" ] && source \"$ITERM_HOOK_DEST\""
 fi
 
-# 10. Copy pricing updater + fetch initial pricing
+# 9. Copy pricing updater + bundled pricing (no network fetch at install time)
 UPDATER_DEST="$HOME/.claude/update-claudetop-pricing.sh"
 cp "$SCRIPT_DIR/update-pricing.sh" "$UPDATER_DEST"
 chmod +x "$UPDATER_DEST"
 cp "$SCRIPT_DIR/pricing.json" "$HOME/.claude/claudetop-pricing.json"
-echo "  Installed pricing updater + initial pricing"
-
-# Try to fetch latest pricing now
-"$UPDATER_DEST" 2>/dev/null || true
-
-# 11. Set up daily pricing update (cron job at 6am)
-CRON_CMD="0 6 * * * $UPDATER_DEST >/dev/null 2>&1"
-if ! crontab -l 2>/dev/null | grep -q "update-claudetop-pricing"; then
-  (crontab -l 2>/dev/null || true; echo "$CRON_CMD") | crontab -
-  echo "  Added daily pricing update cron (6am)"
-else
-  echo "  Daily pricing cron already configured (skipped)"
-fi
+echo "  Installed pricing updater + bundled pricing"
 
 echo ""
 echo "Done! Restart Claude Code to activate claudetop."
 echo ""
+
+# Check if ~/.local/bin is in PATH
+if ! echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
+  echo "NOTE: Add ~/.local/bin to your PATH for the claudetop-stats command:"
+  echo '  export PATH="$HOME/.local/bin:$PATH"'
+  echo ""
+fi
+
 echo "Optional config (add to env or ~/.bashrc):"
 echo "  export CLAUDETOP_DAILY_BUDGET=50    # Daily budget alert"
 echo "  export CLAUDETOP_THEME=minimal      # compact|minimal|full"
 echo "  export CLAUDETOP_TAG=my-feature     # Tag sessions for tracking"
 echo "  export CLAUDETOP_ITERM=all          # iTerm2: title + badge + bgcolor + statusbar"
+echo ""
+echo "Optional: auto-update pricing daily (fetches from GitHub):"
+echo "  (crontab -l 2>/dev/null; echo \"0 6 * * * $UPDATER_DEST >/dev/null 2>&1\") | crontab -"
 echo ""
 echo "View analytics:"
 echo "  claudetop-stats          # Today"

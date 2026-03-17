@@ -38,12 +38,6 @@ git clone https://github.com/liorwn/claudetop.git
 cd claudetop && ./install.sh
 ```
 
-### One-liner
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/liorwn/claudetop/main/install.sh | bash
-```
-
 ### As a Claude Code plugin
 
 ```bash
