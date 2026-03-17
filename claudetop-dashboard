@@ -45,7 +45,7 @@ cat > "$OUTPUT_FILE" <<'HTMLEOF'
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>claudetop dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -486,16 +486,6 @@ function setRange(range) {
 }
 
 // ===== HELPERS =====
-function escapeHtml(str) {
-  if (!str) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
 function fmtCost(v) {
   if (v == null || isNaN(v)) return '$0.000';
   return v >= 1 ? `$${v.toFixed(2)}` : `$${v.toFixed(3)}`;
@@ -947,16 +937,16 @@ function renderTable(sessions) {
 
   const body = document.getElementById('table-body');
   body.innerHTML = sorted.map(s => {
-    const date     = escapeHtml(s.timestamp ? s.timestamp.replace('T', ' ').replace('Z','').slice(0,16) : '—');
-    const project  = escapeHtml(s.project  || '—');
-    const branch   = escapeHtml((s.branch && s.branch.trim()) ? s.branch : '');
-    const model    = escapeHtml(shortModel(s.model));
-    const dur      = escapeHtml(fmtDuration(s.duration_ms));
-    const cost     = escapeHtml(fmtCost(s.cost_usd));
+    const date     = s.timestamp ? s.timestamp.replace('T', ' ').replace('Z','').slice(0,16) : '—';
+    const project  = s.project  || '—';
+    const branch   = (s.branch && s.branch.trim()) ? s.branch : '';
+    const model    = shortModel(s.model);
+    const dur      = fmtDuration(s.duration_ms);
+    const cost     = fmtCost(s.cost_usd);
     const lines    = (s.lines_added||0) + (s.lines_removed||0);
-    const linesStr = escapeHtml(lines ? `+${s.lines_added||0}/-${s.lines_removed||0}` : '—');
-    const ctx      = escapeHtml(s.context_used_pct != null ? `${s.context_used_pct}%` : '—');
-    const tag      = escapeHtml(s.tag || '');
+    const linesStr = lines ? `+${s.lines_added||0}/-${s.lines_removed||0}` : '—';
+    const ctx      = s.context_used_pct != null ? `${s.context_used_pct}%` : '—';
+    const tag      = s.tag || '';
     return `<tr>
       <td>${date}</td>
       <td class="td-project">${project}</td>
