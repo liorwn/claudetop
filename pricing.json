@@ -1,8 +1,16 @@
 {
-  "_updated": "2026-03-14",
+  "_updated": "2026-06-29",
   "_source": "https://docs.anthropic.com/en/docs/about-claude/models",
-  "_notes": "Cache write 5min=1.25x, 1hr=2.0x input. Cache read=0.1x input. Batch=50% off (not used by Claude Code). Extended thinking=standard output rate. Sonnet >200K input gets 2x input, 1.5x output.",
+  "_notes": "Cache write 5min=1.25x, 1hr=2.0x input. Cache read=0.1x input. Batch=50% off (not used by Claude Code). Extended thinking=standard output rate. Sonnet >200K input gets 2x input, 1.5x output. fable family covers Claude Fable 5 / Mythos 5 ($10/$50, 2x Opus).",
   "models": {
+    "fable": {
+      "match": "fable",
+      "input": 10.00,
+      "cache_write_5min": 12.50,
+      "cache_write_1hr": 20.00,
+      "cache_read": 1.00,
+      "output": 50.00
+    },
     "opus": {
       "match": "opus",
       "input": 5.00,

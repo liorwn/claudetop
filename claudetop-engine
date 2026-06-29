@@ -35,8 +35,9 @@ DB_PATH = Path.home() / ".claude" / "claudetop.db"
 HISTORY_FILE = Path.home() / ".claude" / "claudetop-history.jsonl"
 PRICING_FILE = Path.home() / ".claude" / "claudetop-pricing.json"
 
-# Fallback pricing (Claude 4.6, April 2026)
+# Fallback pricing (Claude 4.x, June 2026)
 DEFAULT_PRICING = {
+    "fable":  {"input": 10.00, "cache_write": 12.50, "cache_read": 1.00, "output": 50.00},
     "opus":   {"input": 5.00, "cache_write": 6.25, "cache_read": 0.50, "output": 25.00},
     "sonnet": {"input": 3.00, "cache_write": 3.75, "cache_read": 0.30, "output": 15.00},
     "haiku":  {"input": 1.00, "cache_write": 1.25, "cache_read": 0.10, "output":  5.00},
@@ -50,7 +51,7 @@ def load_pricing():
             data = json.loads(PRICING_FILE.read_text())
             models = data.get("models", {})
             result = {}
-            for family in ("opus", "sonnet", "haiku"):
+            for family in ("fable", "opus", "sonnet", "haiku"):
                 m = models.get(family, {})
                 result[family] = {
                     "input": m.get("input", DEFAULT_PRICING[family]["input"]),
@@ -71,6 +72,8 @@ def model_family(model_id):
     if not model_id:
         return None
     model_id = model_id.lower()
+    if "fable" in model_id or "mythos" in model_id:
+        return "fable"
     if "opus" in model_id:
         return "opus"
     if "sonnet" in model_id:
@@ -1072,7 +1075,7 @@ footer a:hover{text-decoration:underline}
 <script>
 const D=/*DATA*/null;
 const P=D.pricing;
-const MC={opus:'#fb7185',sonnet:'#38bdf8',haiku:'#34d399',other:'#a78bfa'};
+const MC={fable:'#f59e0b',opus:'#fb7185',sonnet:'#38bdf8',haiku:'#34d399',other:'#a78bfa'};
 let range='30d',selModels=new Set(D.models),sortKey='last',sortDir=-1,charts={};
 Chart.defaults.color='#a1a1aa';Chart.defaults.borderColor='#3f3f46';
 Chart.defaults.font.family="'JetBrains Mono',monospace";
@@ -1096,8 +1099,8 @@ function toggleAll(on){
   render();
 }
 
-function mfam(m){if(!m)return'other';m=m.toLowerCase();if(m.includes('opus'))return'opus';if(m.includes('sonnet'))return'sonnet';if(m.includes('haiku'))return'haiku';return'other'}
-function shortModel(m){if(!m)return'?';if(m.includes('opus'))return'Opus';if(m.includes('sonnet'))return'Sonnet';if(m.includes('haiku'))return'Haiku';return m.split('-').slice(0,2).join('-')}
+function mfam(m){if(!m)return'other';m=m.toLowerCase();if(m.includes('fable')||m.includes('mythos'))return'fable';if(m.includes('opus'))return'opus';if(m.includes('sonnet'))return'sonnet';if(m.includes('haiku'))return'haiku';return'other'}
+function shortModel(m){if(!m)return'?';if(m.includes('fable'))return'Fable';if(m.includes('mythos'))return'Mythos';if(m.includes('opus'))return'Opus';if(m.includes('sonnet'))return'Sonnet';if(m.includes('haiku'))return'Haiku';return m.split('-').slice(0,2).join('-')}
 function mcost(m,inp,out,cr,cw){const f=mfam(m);const p=P[f]||P.sonnet;return inp*p.input/1e6+out*p.output/1e6+(cr||0)*p.cache_read/1e6+(cw||0)*p.cache_write/1e6}
 function fmtC(v){return v>=1?'$'+v.toFixed(2):'$'+v.toFixed(3)}
 function fmtT(n){if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return''+n}
