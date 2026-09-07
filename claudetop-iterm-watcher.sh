@@ -49,9 +49,11 @@ while true; do
     # Read state
     TIMESTAMP="" PROJECT="" MODEL="" COST="" VELOCITY="" CTX="" CACHE=""
     DURATION="" TOKENS_IN="" TOKENS_OUT="" LINES_ADDED="" LINES_REMOVED=""
-    TAG="" BGCOLOR="" MODES="" ITERM_SESSION="" STATUS=""
+    TAG="" BGCOLOR="" MODES="" ITERM_SESSION="" STATUS="" USAGE="" USAGE_TOP=""
     while IFS='=' read -r key value; do
       case "$key" in
+        usage)          USAGE="$value" ;;
+        usage_top)      USAGE_TOP="$value" ;;
         timestamp)      TIMESTAMP="$value" ;;
         project)        PROJECT="$value" ;;
         model)          MODEL="$value" ;;
@@ -114,6 +116,7 @@ while true; do
       CACHED_TITLE="${PROJECT} | ${COST}"
       [ -n "$VELOCITY" ] && CACHED_TITLE="${CACHED_TITLE} ${VELOCITY}"
       CACHED_TITLE="${CACHED_TITLE} | ${MODEL} | ctx:${CTX}%"
+      [ -n "$USAGE_TOP" ] && CACHED_TITLE="${CACHED_TITLE} | ${USAGE_TOP}"
       [ -n "$TAG" ] && CACHED_TITLE="${CACHED_TITLE} #${TAG}"
       printf "\033]1;%s\007" "$CACHED_TITLE" > "$MY_TTY"
     fi
@@ -132,6 +135,8 @@ while true; do
       [ -n "$VELOCITY" ] && _s "claudetop_velocity" "$VELOCITY"
       [ "${LINES_ADDED:-0}" -gt 0 ] 2>/dev/null && _s "claudetop_lines" "+${LINES_ADDED}/-${LINES_REMOVED}"
       [ -n "$TAG" ] && _s "claudetop_tag" "#${TAG}"
+      [ -n "$USAGE" ] && _s "claudetop_usage" "$USAGE"
+      [ -n "$USAGE_TOP" ] && _s "claudetop_usage_top" "$USAGE_TOP"
     fi
 
     # Badge (only on change) — project + model

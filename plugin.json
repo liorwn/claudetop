@@ -12,7 +12,8 @@
     "commands/dashboard.md",
     "commands/branch.md",
     "commands/export.md",
-    "commands/pricing.md"
+    "commands/pricing.md",
+    "commands/usage.md"
   ],
   "skills": [],
   "repository": {

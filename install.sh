@@ -47,6 +47,25 @@ else
   echo "  Installed claudetop-stats -> $STATS_DEST"
 fi
 
+# 5b. Install claudetop-usage (plan usage windows: 5h / 7d / per-model / credits)
+USAGE_SRC="$SCRIPT_DIR/claudetop-usage"
+USAGE_DEST="$HOME/.claude/claudetop-usage"
+USAGE_BIN_DEST="/usr/local/bin/claudetop-usage"
+if [ -f "$USAGE_SRC" ]; then
+  cp "$USAGE_SRC" "$USAGE_DEST"
+  chmod +x "$USAGE_DEST"
+  echo "  Installed claudetop-usage -> $USAGE_DEST"
+  if [ -w "$(dirname "$USAGE_BIN_DEST")" ]; then
+    cp "$USAGE_SRC" "$USAGE_BIN_DEST" && chmod +x "$USAGE_BIN_DEST"
+    echo "  Installed claudetop-usage -> $USAGE_BIN_DEST"
+  else
+    sudo cp "$USAGE_SRC" "$USAGE_BIN_DEST" && sudo chmod +x "$USAGE_BIN_DEST"
+    echo "  Installed claudetop-usage -> $USAGE_BIN_DEST"
+  fi
+  # Prime the cache so the first status line already has the per-model windows
+  "$USAGE_DEST" --refresh 2>/dev/null || true
+fi
+
 # 6. Copy SessionEnd hook
 HOOK_SRC="$SCRIPT_DIR/hooks/session-end.sh"
 HOOK_DEST="$HOME/.claude/hooks/claudetop-session-end.sh"
@@ -169,6 +188,10 @@ echo "  export CLAUDETOP_DAILY_BUDGET=50    # Daily budget alert"
 echo "  export CLAUDETOP_THEME=minimal      # compact|minimal|full"
 echo "  export CLAUDETOP_TAG=my-feature     # Tag sessions for tracking"
 echo "  export CLAUDETOP_ITERM=all          # iTerm2: title + badge + bgcolor + statusbar"
+echo ""
+echo "Plan usage (subscribers): 5h / 7d / per-model windows + credits"
+echo "  claudetop-usage --show   # Bars for every window, % used, % left, reset time"
+echo "  export CLAUDETOP_USAGE=off          # Hide the plan line"
 echo ""
 echo "View analytics:"
 echo "  claudetop-stats          # Today (from hook history)"

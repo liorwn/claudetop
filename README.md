@@ -16,9 +16,10 @@
 </p>
 
 ```
-14:32  my-project/src/app  Opus  20m 0s  +256/-43  #auth-refactor
+14:32  my-project/src/app  Fable 5.1  20m 0s  +256/-43  #auth-refactor
 152.3K in / 45.2K out  ████░░░░░░ 38%  $3.47  $5.10/hr  ~$174/mo
 cache: 66%  efficiency: $0.012/line  opus:~$3.20  sonnet:~$0.88  haiku:~$0.23
+plan: 5h ████████░░ 82% ↻2h18m  7d ██████░░░░ 64% ↻4d1h  Fable ████████░░ 81% ↻4d1h  credits $0/$2000
 in:80% out:20% (fresh:15% cwrite:7% cread:76%)
 $5 MARK  |  main*  |  ♫ Artist - Song  |  PROJ-123  |  CI ✓
 ```
@@ -65,9 +66,10 @@ A blank prompt. No context. No cost. No idea.
 
 ### After claudetop
 ```
-14:32  my-project/src/app  Opus  20m 0s  +256/-43  #auth-refactor
+14:32  my-project/src/app  Fable 5.1  20m 0s  +256/-43  #auth-refactor
 152.3K in / 45.2K out  ████░░░░░░ 38%  $3.47  $5.10/hr  ~$174/mo
 cache: 66%  efficiency: $0.012/line  opus:~$3.20  sonnet:~$0.88  haiku:~$0.23
+plan: 5h ████████░░ 82% ↻2h18m  7d ██████░░░░ 64% ↻4d1h  Fable ████████░░ 81% ↻4d1h  credits $0/$2000
 $5 MARK  |  TRY /fast  |  main*  |  CI ✓  |  ♫ Bonobo - Kerala
 ```
 
@@ -75,11 +77,39 @@ Every response, you see:
 - **What project** you're in and how deep
 - **What model** is running and for how long
 - **What it costs** right now, per hour, and projected monthly
+- **How much plan you have left** — 5-hour, 7-day, and per-model (Fable/Opus/Sonnet) windows with reset countdowns
 - **How efficient** your cache is (are you wasting tokens?)
 - **What it would cost** on a different model (should you switch?)
 - **Smart alerts** when something is wrong
 
 ## Features
+
+### Plan usage windows (subscribers)
+If you're on a Claude Pro/Max/Team plan, the `plan:` line shows every rate-limit window Anthropic enforces on you — as a bar, % used, and time until it resets:
+
+```
+plan: 5h ████████░░ 82% ↻2h18m  7d ██████░░░░ 64% ↻4d1h  Fable ████████░░ 81% ↻4d1h  credits $0/$2000
+```
+
+| Window | What it is |
+|--------|-----------|
+| `5h` | Current session window (rolls every 5 hours) |
+| `7d` | Current week, all models |
+| `Fable` / `Opus` / `Sonnet` | Current week, that model only — appears whenever your plan has a per-model cap |
+| `credits` | Extra-usage credits spent this month / your monthly cap (only if extra usage is enabled) |
+
+Bars go yellow at 50% and red at 80%. At 90% you get a `Fable LIMIT 93% ↻4d1h` alert so you can switch models or wrap up before Claude Code stops you. The `minimal` theme shows the same numbers inline (`5h:82% 7d:64% Fable:81%`); `compact` shows only the tightest window.
+
+The 5h and 7d numbers come straight from Claude Code (the status line JSON carries them after the first API response). Per-model windows and credits come from the same usage endpoint the `/usage` screen uses, fetched by `claudetop-usage` in the background at most once a minute and cached in `~/.claude/claudetop-usage.json` — the status line itself never waits on the network. It reads the OAuth credential Claude Code already stored (macOS Keychain, or `~/.claude/.credentials.json` on Linux) and never refreshes or modifies it. API-key, Bedrock, and Vertex sessions have no plan windows, so the line simply doesn't appear.
+
+```bash
+claudetop-usage --show       # every window as a 20-char bar with % used, % left, reset time
+claudetop-usage --refresh    # force a refetch
+export CLAUDETOP_USAGE=off   # hide the plan line
+export CLAUDETOP_USAGE_TTL=120   # refresh every 2 minutes instead of 1
+```
+
+Or in Claude Code: `/claudetop:usage`.
 
 ### Real-time cost tracking
 Your actual session cost (green), burn rate per hour, and monthly forecast extrapolated from your history. No more billing surprises.
@@ -105,6 +135,7 @@ Only appear when something needs your attention:
 | `SPINNING?` | >$1 spent, zero code output | Stuck in a research loop |
 | `TRY /fast` | >$0.05/line on Opus | This task doesn't need the biggest model |
 | `COMPACT SOON` | Context window >80% full | Auto-compaction is imminent |
+| `Fable LIMIT 93%` | A plan window (5h / 7d / per-model) is ≥90% used | Switch models or wrap up; shows when it resets |
 
 ### Session history & analytics
 
@@ -193,7 +224,7 @@ export CLAUDETOP_ITERM=bgcolor       # Background color tint by state
 export CLAUDETOP_ITERM=title,badge   # Combine any options
 ```
 
-**Tab title** — Shows `project | $4.21 | Opus 4.6 | ctx:38%` in your iTerm2 tab. Zero configuration.
+**Tab title** — Shows `project | $4.21 | Fable 5.1 | ctx:38% | Fable 81%` in your iTerm2 tab (the last item is your tightest plan window). Zero configuration.
 
 **Badge** — Faint watermark in the terminal background with cost, model, and context at a glance. Great for keeping cost visible while scrolling through output.
 
@@ -223,6 +254,8 @@ When a session ends, the background stays green so you can see at a glance which
 | `\(user.claudetop_tokens_out)` | Output tokens | `45.2K` |
 | `\(user.claudetop_lines)` | Lines changed | `+256/-43` |
 | `\(user.claudetop_tag)` | Session tag | `#auth-refactor` |
+| `\(user.claudetop_usage)` | All plan windows | `5h:82% 7d:64% Fable:81%` |
+| `\(user.claudetop_usage_top)` | Tightest plan window | `Fable 81%` |
 
 No-op on non-iTerm2 terminals — escape sequences are silently ignored.
 
@@ -299,6 +332,7 @@ Every metric uses traffic-light colors — green means healthy, red means act:
 | Cache ratio | ≥60% | ≥30% | <30% |
 | Efficiency | <$0.01/line | <$0.05/line | ≥$0.05/line |
 | Context bar | <50% | 50-80% | ≥80% |
+| Plan windows (5h / 7d / per-model) | <50% | 50-80% | ≥80% (alert at 90%) |
 | Time of day | 6am-10pm | — | Magenta after 10pm |
 
 ## Requirements
@@ -306,6 +340,7 @@ Every metric uses traffic-light colors — green means healthy, red means act:
 - [Claude Code](https://claude.ai/code) with status line support
 - `jq` — `brew install jq` / `apt install jq`
 - `bc` — pre-installed on macOS and most Linux
+- `curl` — only for the plan usage windows (pre-installed on macOS and most Linux)
 
 ## Contributing
 

@@ -1,0 +1,256 @@
+#!/bin/bash
+# claudetop-usage — plan usage windows for Claude Code subscribers
+# https://github.com/liorwn/claudetop
+#
+# Fetches your Claude.ai plan limits (5-hour session, 7-day all-models,
+# and per-model weekly windows such as Fable/Opus/Sonnet) plus extra-usage
+# credits, and caches them so the status line can render them with zero
+# latency. The status line never calls the network itself — it reads the
+# cache and kicks this script off in the background when the cache is stale.
+#
+# Usage:
+#   claudetop-usage             refresh the cache if stale (silent; used by the status line)
+#   claudetop-usage --refresh   force a refetch now
+#   claudetop-usage --show      print the windows as bars (human-readable)
+#   claudetop-usage --json      print the normalized cache
+#
+# Environment:
+#   CLAUDETOP_USAGE_CACHE   cache path (default: ~/.claude/claudetop-usage.json)
+#   CLAUDETOP_USAGE_TTL     seconds before the cache is considered stale (default: 60)
+#   CLAUDE_CODE_OAUTH_TOKEN use this OAuth token instead of the stored credential
+#
+# Credential lookup (read-only, never refreshed by this script):
+#   1. $CLAUDE_CODE_OAUTH_TOKEN
+#   2. macOS Keychain item "Claude Code-credentials" (the one Claude Code writes)
+#   3. ~/.claude/.credentials.json (Linux / WSL)
+#
+# Requires: curl, jq. API-key / Bedrock / Vertex sessions have no plan windows;
+# the cache is then written with status "unavailable" and the status line shows nothing.
+
+set -uo pipefail
+
+CACHE="${CLAUDETOP_USAGE_CACHE:-$HOME/.claude/claudetop-usage.json}"
+TTL="${CLAUDETOP_USAGE_TTL:-60}"
+LOCK="${CACHE}.lock"
+ENDPOINT="https://api.anthropic.com/api/oauth/usage"
+MODE="${1:-}"
+
+now() { date +%s; }
+
+cache_age() {
+  [ -f "$CACHE" ] || { echo 999999; return; }
+  local m
+  m=$(stat -f %m "$CACHE" 2>/dev/null || stat -c %Y "$CACHE" 2>/dev/null || echo 0)
+  echo $(( $(now) - m ))
+}
+
+# --- credential lookup -----------------------------------------------------
+
+# Prints "expiresAt<TAB>token" for a credential blob, or nothing.
+blob_to_row() {
+  printf '%s' "$1" | jq -r 'select(.claudeAiOauth.accessToken? != null) | "\(.claudeAiOauth.expiresAt // 0)\t\(.claudeAiOauth.accessToken)"' 2>/dev/null
+}
+
+get_token() {
+  if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+    printf '%s' "$CLAUDE_CODE_OAUTH_TOKEN"
+    return 0
+  fi
+
+  local rows=""
+  if command -v security >/dev/null 2>&1; then
+    # Claude Code may have written several entries over time (account name
+    # changed across versions). Collect all we can reach and keep the freshest.
+    local blob acct
+    for acct in "$(id -un 2>/dev/null || true)" ""; do
+      if [ -n "$acct" ]; then
+        blob=$(security find-generic-password -s "Claude Code-credentials" -a "$acct" -w 2>/dev/null) || blob=""
+      else
+        blob=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null) || blob=""
+      fi
+      [ -n "$blob" ] && rows+="$(blob_to_row "$blob")"$'\n'
+    done
+  fi
+  if [ -f "$HOME/.claude/.credentials.json" ]; then
+    rows+="$(blob_to_row "$(cat "$HOME/.claude/.credentials.json")")"$'\n'
+  fi
+
+  # Highest expiresAt wins.
+  printf '%s' "$rows" | awk -F'\t' 'NF==2 && $1+0 >= best {best=$1+0; tok=$2} END {if (tok != "") printf "%s", tok}'
+}
+
+# --- cache writing ---------------------------------------------------------
+
+write_cache() {
+  local tmp="${CACHE}.tmp.$$"
+  printf '%s\n' "$1" > "$tmp" && mv -f "$tmp" "$CACHE"
+}
+
+# Keep previously-known buckets when a fetch fails so the status line degrades
+# to stale-but-useful instead of blank. status: unavailable|error, error: text.
+write_failure() {
+  local status="$1" err="$2" prev='{}'
+  [ -f "$CACHE" ] && prev=$(cat "$CACHE" 2>/dev/null || echo '{}')
+  write_cache "$(jq -cn --arg s "$status" --arg e "$err" --argjson now "$(now)" --argjson prev "$prev" '
+    {fetched_at: $now, status: $s, error: $e,
+     stale_since: ($prev.stale_since // $prev.fetched_at // $now),
+     buckets: ($prev.buckets // []), extra: ($prev.extra // {enabled: false})}')"
+}
+
+# Normalize the raw /api/oauth/usage response into a small, stable shape:
+#   buckets[] = {key, label, pct (0-100 used), resets_at (epoch or null)}
+#   extra     = {enabled, used_minor, limit_minor, decimals, currency, pct}
+normalize() {
+  jq -c --argjson now "$(now)" '
+    def to_epoch:
+      if type == "number" then .
+      elif type == "string" then
+        (try (sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601) catch null)
+      else null end;
+    def pct_of: if type == "number" then (. | round) else null end;
+    def bucket(k; l; p; r): {key: k, label: l, pct: (p | pct_of), resets_at: (r | to_epoch)};
+
+    (if (.limits | type) == "array" and (.limits | length) > 0 then
+       [ .limits[]
+         | if .kind == "session" then bucket("five_hour"; "5h"; .percent; .resets_at)
+           elif .kind == "weekly_all" then bucket("seven_day"; "7d"; .percent; .resets_at)
+           elif .kind == "weekly_scoped" and (.scope.model.display_name | type) == "string"
+             then bucket("weekly_scoped:" + .scope.model.display_name; .scope.model.display_name; .percent; .resets_at)
+           else empty end ]
+     else
+       [ (.five_hour        // empty | bucket("five_hour";             "5h";     .utilization; .resets_at)),
+         (.seven_day        // empty | bucket("seven_day";             "7d";     .utilization; .resets_at)),
+         (.seven_day_opus   // empty | bucket("weekly_scoped:Opus";    "Opus";   .utilization; .resets_at)),
+         (.seven_day_sonnet // empty | bucket("weekly_scoped:Sonnet";  "Sonnet"; .utilization; .resets_at)) ]
+     end
+     | map(select(.pct != null))) as $buckets
+    | (.extra_usage // {}) as $x
+    | {
+        fetched_at: $now,
+        status: "ok",
+        buckets: $buckets,
+        extra: (if $x.is_enabled == true then {
+                  enabled: true,
+                  used_minor: (($x.used_credits // 0) | round),
+                  limit_minor: (($x.monthly_limit // 0) | round),
+                  decimals: ($x.decimal_places // 2),
+                  currency: ($x.currency // "USD"),
+                  pct: (.spend.percent // $x.utilization // 0)
+                } else {enabled: false} end)
+      }'
+}
+
+fetch() {
+  command -v curl >/dev/null 2>&1 || { write_failure "error" "curl not installed"; return 1; }
+  command -v jq   >/dev/null 2>&1 || return 1
+
+  local token
+  token=$(get_token)
+  if [ -z "$token" ]; then
+    write_failure "unavailable" "no Claude.ai OAuth credential (API key / Bedrock / Vertex sessions have no plan windows)"
+    return 1
+  fi
+
+  local resp code body
+  resp=$(curl -sS -m 8 \
+    -H "Authorization: Bearer $token" \
+    -H "anthropic-beta: oauth-2025-04-20" \
+    -H "Content-Type: application/json" \
+    -w $'\n%{http_code}' "$ENDPOINT" 2>&1) || { write_failure "error" "curl: ${resp##*$'\n'}"; return 1; }
+  code=${resp##*$'\n'}
+  body=${resp%$'\n'*}
+
+  if [ "$code" != "200" ]; then
+    local msg
+    msg=$(printf '%s' "$body" | jq -r '.error.message // empty' 2>/dev/null)
+    write_failure "error" "http ${code}${msg:+: $msg}"
+    return 1
+  fi
+
+  local normalized
+  normalized=$(printf '%s' "$body" | normalize 2>/dev/null)
+  if [ -z "$normalized" ]; then
+    write_failure "error" "unexpected response shape"
+    return 1
+  fi
+  write_cache "$normalized"
+}
+
+# Single-flight: several status line renders can fire at once.
+with_lock() {
+  if ! mkdir "$LOCK" 2>/dev/null; then
+    # Break a lock older than 30s (a crashed fetcher).
+    local lm
+    lm=$(stat -f %m "$LOCK" 2>/dev/null || stat -c %Y "$LOCK" 2>/dev/null || echo 0)
+    if [ $(( $(now) - lm )) -gt 30 ]; then
+      rmdir "$LOCK" 2>/dev/null || true
+      mkdir "$LOCK" 2>/dev/null || return 0
+    else
+      return 0
+    fi
+  fi
+  trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+  "$@"
+}
+
+# --- human output ----------------------------------------------------------
+
+fmt_reset() {
+  local at=$1 d
+  [ -n "$at" ] && [ "$at" != "null" ] && [ "$at" -gt 0 ] 2>/dev/null || { echo "--"; return; }
+  d=$(( at - $(now) ))
+  [ "$d" -le 0 ] && { echo "now"; return; }
+  if [ "$d" -ge 86400 ]; then printf '%dd %dh' $((d/86400)) $(((d%86400)/3600))
+  elif [ "$d" -ge 3600 ]; then printf '%dh %dm' $((d/3600)) $(((d%3600)/60))
+  else printf '%dm' $((d/60)); fi
+}
+
+show() {
+  [ -f "$CACHE" ] || { echo "claudetop-usage: no cache yet — run: claudetop-usage --refresh"; return 1; }
+  local status err
+  status=$(jq -r '.status // "unknown"' "$CACHE")
+  err=$(jq -r '.error // empty' "$CACHE")
+  local age; age=$(cache_age)
+  echo "Claude plan usage  (cache ${age}s old, status: ${status})"
+  [ -n "$err" ] && echo "  ! ${err}"
+  echo "──────────────────────────────────────────────────────"
+  local G="\033[32m" Y="\033[33m" R="\033[31m" D="\033[2m" X="\033[0m" GR="\033[90m"
+  jq -r '.buckets[] | [.label, .pct, (.resets_at // 0)] | @tsv' "$CACHE" | while IFS=$'\t' read -r label pct at; do
+    local bar="" color="$G" i filled
+    if [ "$pct" -ge 80 ]; then color="$R"; elif [ "$pct" -ge 50 ]; then color="$Y"; fi
+    filled=$(( pct * 20 / 100 )); [ "$filled" -gt 20 ] && filled=20
+    for ((i=0; i<20; i++)); do
+      if [ $i -lt $filled ]; then bar="${bar}${color}█${X}"; else bar="${bar}${GR}░${X}"; fi
+    done
+    printf "  %-10s %b %3d%% used  ${D}%3d%% left  resets in %s${X}\n" "$label" "$bar" "$pct" $((100 - pct)) "$(fmt_reset "$at")"
+  done
+  if [ "$(jq -r '.extra.enabled // false' "$CACHE")" = "true" ]; then
+    jq -r '.extra | [.used_minor, .limit_minor, .decimals, .currency, (.pct // 0)] | @tsv' "$CACHE" | while IFS=$'\t' read -r used limit dec cur pct; do
+      local div=1; for ((i=0; i<dec; i++)); do div=$((div*10)); done
+      local sym="$cur "; [ "$cur" = "USD" ] && sym='$'
+      printf "  %-10s %s%s / %s%s used  ${D}(%s%%)${X}\n" "credits" "$sym" "$(echo "scale=2; $used / $div" | bc | sed 's/^\./0./; s/\.00$//')" "$sym" "$(echo "$limit / $div" | bc)" "$pct"
+    done
+  fi
+}
+
+# --- entry -----------------------------------------------------------------
+
+case "$MODE" in
+  --show)
+    if [ "$(cache_age)" -gt "$TTL" ]; then with_lock fetch; fi
+    show
+    ;;
+  --json)
+    if [ "$(cache_age)" -gt "$TTL" ]; then with_lock fetch; fi
+    [ -f "$CACHE" ] && cat "$CACHE" || echo '{"status":"missing","buckets":[]}'
+    ;;
+  --refresh)
+    with_lock fetch
+    ;;
+  -h|--help)
+    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *)
+    if [ "$(cache_age)" -gt "$TTL" ]; then with_lock fetch; fi
+    ;;
+esac

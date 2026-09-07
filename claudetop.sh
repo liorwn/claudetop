@@ -9,6 +9,9 @@
 #   CLAUDETOP_THEME          compact|minimal|full (default: full)
 #   CLAUDETOP_DAILY_BUDGET   daily budget in USD (e.g., 50)
 #   CLAUDETOP_TAG            tag for session tracking (e.g., "auth-refactor")
+#   CLAUDETOP_USAGE          on|off — plan usage windows: 5h, 7d, per-model (Fable/Opus/Sonnet),
+#                            extra-usage credits (default: on; needs claudetop-usage installed)
+#   CLAUDETOP_USAGE_TTL      seconds between background refreshes of the usage cache (default: 60)
 #   CLAUDETOP_ITERM          iTerm2 integration (default: off)
 #                            title     — set tab/window title with cost & model
 #                            statusbar — set user variables for iTerm2 status bar
@@ -361,6 +364,122 @@ if [ -f "$HISTORY_FILE" ]; then
   fi
 fi
 
+# --- Plan usage windows (5h session / 7d all models / per-model weekly, e.g. Fable) ---
+# The live 5h and 7d numbers arrive in the status JSON itself (rate_limits).
+# Per-model weekly windows and extra-usage credits come from a cache that
+# claudetop-usage writes; this script never touches the network — it reads the
+# cache and re-launches the fetcher in the background when the cache is stale.
+USAGE_MODE="${CLAUDETOP_USAGE:-on}"
+USAGE_CACHE="${CLAUDETOP_USAGE_CACHE:-$HOME/.claude/claudetop-usage.json}"
+USAGE_TTL="${CLAUDETOP_USAGE_TTL:-60}"
+USAGE_BIN="${CLAUDETOP_USAGE_BIN:-$HOME/.claude/claudetop-usage}"
+# Fallbacks: a claudetop-usage sitting next to this script (works when the
+# script is a symlink into a synced folder), then anything on PATH.
+if [ ! -x "$USAGE_BIN" ]; then
+  _self_dir=$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")
+  if [ -x "$_self_dir/claudetop-usage" ]; then
+    USAGE_BIN="$_self_dir/claudetop-usage"
+  else
+    USAGE_BIN=$(command -v claudetop-usage 2>/dev/null || true)
+  fi
+fi
+NOW_EPOCH=$(date +%s)
+
+USAGE_LINE=""       # full theme: one bar per window
+USAGE_SHORT=""      # minimal theme: "5h:82% 7d:64% Fable:81%"
+USAGE_TOP_LABEL=""  # tightest window (highest % used) — compact theme + alert
+USAGE_TOP_PCT=0
+USAGE_TOP_FMT=""
+USAGE_TOP_RESET=""
+USAGE_CACHE_STATUS=""
+PLAIN_USAGE=""
+
+fmt_reset() {
+  local at=${1:-0} d
+  [ "$at" -gt 0 ] 2>/dev/null || { echo ""; return; }
+  d=$(( at - NOW_EPOCH ))
+  if [ "$d" -le 0 ]; then echo "now"
+  elif [ "$d" -ge 86400 ]; then printf '%dd%dh' $((d / 86400)) $(((d % 86400) / 3600))
+  elif [ "$d" -ge 3600 ]; then printf '%dh%02dm' $((d / 3600)) $(((d % 3600) / 60))
+  else printf '%dm' $((d / 60)); fi
+}
+
+usage_color() {
+  if [ "$1" -ge 80 ]; then printf '%s' "$RED"
+  elif [ "$1" -ge 50 ]; then printf '%s' "$YELLOW"
+  else printf '%s' "$GREEN"; fi
+}
+
+usage_bar() {
+  local pct=$1 color bar="" i filled len=${BAR_LEN:-10}
+  color=$(usage_color "$pct")
+  filled=$(( pct * len / 100 )); [ "$filled" -gt "$len" ] && filled=$len
+  for ((i = 0; i < len; i++)); do
+    if [ $i -lt $filled ]; then bar="${bar}${color}█${RESET}"; else bar="${bar}${GRAY}░${RESET}"; fi
+  done
+  printf '%s' "$bar"
+}
+
+if [ "$USAGE_MODE" != "off" ]; then
+  USAGE_CACHE_JSON='{}'
+  if [ -f "$USAGE_CACHE" ]; then
+    USAGE_CACHE_JSON=$(cat "$USAGE_CACHE" 2>/dev/null) || USAGE_CACHE_JSON='{}'
+    [ -n "$USAGE_CACHE_JSON" ] || USAGE_CACHE_JSON='{}'
+    USAGE_CACHE_STATUS=$(jq -r '.status // ""' <<< "$USAGE_CACHE_JSON" 2>/dev/null) || USAGE_CACHE_STATUS=""
+  fi
+
+  # Live windows first (fresh from the last API response), then cached buckets
+  # that Claude Code doesn't pass through (per-model weeklies).
+  USAGE_ROWS=$(jq -rn --argjson s "$JSON" --argjson c "$USAGE_CACHE_JSON" '
+    def row(k; l; p; r): select(p != null) | [k, l, (p | round), (r // 0)] | @tsv;
+    [ ($s.rate_limits.five_hour   // empty | row("five_hour";   "5h";    .used_percentage; .resets_at)),
+      ($s.rate_limits.seven_day   // empty | row("seven_day";   "7d";    .used_percentage; .resets_at)),
+      ($s.rate_limits.spend_limit // empty | row("spend_limit"; "spend"; .used_percentage; .resets_at)) ] as $live
+    | ($live | map(split("\t")[0])) as $have
+    | ($live + [ ($c.buckets // [])[]
+                 | select(.pct != null)
+                 | .key as $k | select(($have | index($k)) == null)
+                 | row(.key; .label; .pct; .resets_at) ])[]
+  ' 2>/dev/null) || USAGE_ROWS=""
+
+  if [ -n "$USAGE_ROWS" ]; then
+    while IFS=$'\t' read -r _ u_label u_pct u_at; do
+      [ -n "$u_label" ] || continue
+      u_pct=${u_pct%.*}
+      u_color=$(usage_color "$u_pct")
+      u_reset=$(fmt_reset "$u_at")
+      u_seg="${DIM}${u_label}${RESET} $(usage_bar "$u_pct") ${u_color}${u_pct}%${RESET}"
+      [ -n "$u_reset" ] && u_seg="${u_seg} ${GRAY}↻${u_reset}${RESET}"
+      USAGE_LINE="${USAGE_LINE:+$USAGE_LINE  }${u_seg}"
+      USAGE_SHORT="${USAGE_SHORT:+$USAGE_SHORT }${DIM}${u_label}:${RESET}${u_color}${u_pct}%${RESET}"
+      PLAIN_USAGE="${PLAIN_USAGE:+$PLAIN_USAGE }${u_label}:${u_pct}%"
+      if [ -z "$USAGE_TOP_LABEL" ] || [ "$u_pct" -gt "$USAGE_TOP_PCT" ]; then
+        USAGE_TOP_LABEL=$u_label
+        USAGE_TOP_PCT=$u_pct
+        USAGE_TOP_FMT="${DIM}${u_label}${RESET} ${u_color}${u_pct}%${RESET}"
+        USAGE_TOP_RESET=$u_reset
+      fi
+    done <<< "$USAGE_ROWS"
+  fi
+
+  # Extra-usage credits (pay-as-you-go top-up beyond the plan windows)
+  USAGE_EXTRA=$(jq -r 'select(.extra.enabled == true) | .extra | "\(.used_minor // 0)\t\(.limit_minor // 0)\t\(.decimals // 2)"' <<< "$USAGE_CACHE_JSON" 2>/dev/null) || USAGE_EXTRA=""
+  if [ -n "$USAGE_EXTRA" ]; then
+    IFS=$'\t' read -r x_used x_limit x_dec <<< "$USAGE_EXTRA"
+    x_div=1; for ((i = 0; i < x_dec; i++)); do x_div=$((x_div * 10)); done
+    if [ "${x_limit:-0}" -gt 0 ]; then
+      x_used_fmt=$(echo "scale=2; $x_used / $x_div" | bc | sed 's/^\./0./; s/\.00$//')
+      x_limit_fmt=$(echo "$x_limit / $x_div" | bc)
+      USAGE_LINE="${USAGE_LINE:+$USAGE_LINE  }${DIM}credits${RESET} ${GRAY}\$${x_used_fmt}/\$${x_limit_fmt}${RESET}"
+    fi
+  fi
+
+  # Cache couldn't be refreshed (auth/network) — flag the numbers as possibly stale
+  if [ -n "$USAGE_LINE" ] && [ "$USAGE_CACHE_STATUS" = "error" ]; then
+    USAGE_LINE="${YELLOW}!${RESET} ${USAGE_LINE}"
+  fi
+fi
+
 # --- Plugin system ---
 PLUGIN_DIR="${HOME}/.claude/claudetop.d"
 PLUGIN_OUTPUT=""
@@ -425,6 +544,11 @@ if [ "$TOTAL_LINES" -gt 0 ] && [ "$(echo "$CPL >= 0.05" | bc)" -eq 1 ]; then
   esac
 fi
 
+# Plan window nearly exhausted (5h / 7d / per-model)
+if [ -n "$USAGE_TOP_LABEL" ] && [ "$USAGE_TOP_PCT" -ge 90 ]; then
+  ALERTS+=("${RED}${BOLD}${USAGE_TOP_LABEL} LIMIT ${USAGE_TOP_PCT}%${RESET}${USAGE_TOP_RESET:+ ${DIM}↻${USAGE_TOP_RESET}${RESET}}")
+fi
+
 # Build alert string
 ALERT_STR=""
 for alert in "${ALERTS[@]+"${ALERTS[@]}"}"; do
@@ -450,6 +574,9 @@ if [ "$THEME" = "compact" ]; then
   fi
   printf "  %b ${DIM}%s%%${RESET}" "$CTX_BAR" "$CTX_USED"
   printf "%b" "$COMPACT_WARN"
+  if [ -n "$USAGE_TOP_FMT" ]; then
+    printf "  %b" "$USAGE_TOP_FMT"
+  fi
   printf "%b" "$TAG_FMT"
   if [ -n "$ALERT_STR" ]; then
     printf "  %b" "$ALERT_STR"
@@ -482,6 +609,9 @@ elif [ "$THEME" = "minimal" ]; then
   printf "%b" "$COMPACT_WARN"
   if [ -n "$CACHE_RATIO" ]; then
     printf "  ${DIM}cache:${RESET} %b" "$CACHE_RATIO"
+  fi
+  if [ -n "$USAGE_SHORT" ]; then
+    printf "  %b" "$USAGE_SHORT"
   fi
   if [ -n "$ALERT_STR" ]; then
     printf "  %b" "$ALERT_STR"
@@ -531,12 +661,17 @@ else
   printf "${DIM}  opus:%b  sonnet:%b  haiku:%b${RESET}" "$OPUS_COST_FMT" "$SONNET_COST_FMT" "$HAIKU_COST_FMT"
   echo ""
 
-  # Line 4 (optional): Context composition (when there's data)
+  # Line 4 (optional): Plan usage windows — 5h / 7d / per-model / credits
+  if [ -n "$USAGE_LINE" ]; then
+    printf "${DIM}plan:${RESET} %b\n" "$USAGE_LINE"
+  fi
+
+  # Line 5 (optional): Context composition (when there's data)
   if [ -n "$CTX_COMP" ]; then
     printf "%b\n" "$CTX_COMP"
   fi
 
-  # Line 5 (optional): Alerts + Plugin outputs
+  # Line 6 (optional): Alerts + Plugin outputs
   LINE5=""
   if [ -n "$ALERT_STR" ]; then
     LINE5="$ALERT_STR"
@@ -622,7 +757,28 @@ if [ -n "$ITERM_MODE" ]; then
     echo "lines_added=${LINES_ADDED}"
     echo "lines_removed=${LINES_REMOVED}"
     [ -n "${CLAUDETOP_TAG:-}" ] && echo "tag=${CLAUDETOP_TAG}"
+    [ -n "$PLAIN_USAGE" ] && echo "usage=${PLAIN_USAGE}"
+    [ -n "$USAGE_TOP_LABEL" ] && echo "usage_top=${USAGE_TOP_LABEL} ${USAGE_TOP_PCT}%"
     echo "bgcolor=000000"
     echo "modes=${ITERM_MODE}"
   } > "$ITERM_STATE_FILE"
+fi
+
+# =============================================
+# Background refresh of the plan-usage cache
+# =============================================
+# Done last so it never delays the render. Double-fork + no inherited fds, so
+# Claude Code's status line pipe closes as soon as this script exits.
+if [ "$USAGE_MODE" != "off" ] && [ -n "$USAGE_BIN" ] && [ -x "$USAGE_BIN" ]; then
+  _u_ttl=$USAGE_TTL
+  # No plan windows for this credential (API key / Bedrock / Vertex): back off to hourly
+  [ "$USAGE_CACHE_STATUS" = "unavailable" ] && _u_ttl=3600
+  _u_age=$((_u_ttl + 1))
+  if [ -f "$USAGE_CACHE" ]; then
+    _u_m=$(stat -f %m "$USAGE_CACHE" 2>/dev/null || stat -c %Y "$USAGE_CACHE" 2>/dev/null || echo 0)
+    _u_age=$(( NOW_EPOCH - _u_m ))
+  fi
+  if [ "$_u_age" -gt "$_u_ttl" ]; then
+    ( CLAUDETOP_USAGE_CACHE="$USAGE_CACHE" CLAUDETOP_USAGE_TTL="$_u_ttl" nohup "$USAGE_BIN" >/dev/null 2>&1 </dev/null & ) 2>/dev/null
+  fi
 fi
